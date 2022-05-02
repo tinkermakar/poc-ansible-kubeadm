@@ -1,0 +1,17 @@
+[kube-masters]
+<...>
+
+
+[kube-workers]
+<...>
+
+
+[kube-all:children]
+<...>
+
+
+[all:vars]
+my_password=<...>
+ansible_user=<...>
+ansible_password={{ my_password }}
+ansible_become_password={{ my_password }}
