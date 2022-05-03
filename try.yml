@@ -1,0 +1,25 @@
+---
+- hosts: kube-all
+  become: yes
+  become_user: root
+  tasks:
+
+    - name: Extract join command
+      when: inventory_hostname in groups['kube-master-1']
+      shell: echo 1234
+      register: join_command_raw
+
+    - name: Make the join command reuseable
+      when: inventory_hostname in groups['kube-master-1']
+      set_fact:
+        join_command: "{{ join_command_raw.stdout }}"
+
+
+    - name: Join workers to the cluster 
+      when: inventory_hostname in groups['kube-workers']
+      debug:
+        var: hostvars[groups['kube-master-1'][0]]
+      # vars:
+      #   # TODO fix the error here WIP
+      #   main_command: "{{ hostvars['kube-master-1']['join_command'] }} --node-name {{ hostvars[inventory_hostname].ansible_default_ipv4.macaddress }}"
+      # shell: "{{ main_command }} || ( kubeadm reset -f && {{ main_command }} )"

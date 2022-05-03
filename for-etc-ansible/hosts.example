@@ -1,5 +1,12 @@
-[kube-masters]
+[kube-master-1]
 <...>
+
+[kube-other-masters]
+<...>
+
+[kube-masters:children]
+kube-master-1
+kube-other-masters
 
 
 [kube-workers]
@@ -7,7 +14,8 @@
 
 
 [kube-all:children]
-<...>
+kube-masters
+kube-workers
 
 
 [all:vars]

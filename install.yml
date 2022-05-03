@@ -1,8 +1,11 @@
 ---
-- hosts: kube-2
+- hosts: kube-all
   become: yes
   become_user: root
   tasks:
+
+    # 1. Turn off swap memory
+
     - name: Disable swap now
       command: swapoff -a
 
@@ -12,18 +15,26 @@
         special_time: reboot
         job: "swapoff -a"
 
-    - name: Letting iptables see bridged traffic
-      shell:
-        cmd: |
-          cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-          br_netfilter
-          EOF
 
-          cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+    # 2. Install kubeadm & Co.
+    # Documentation: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/
+
+    - name: Letting iptables see bridged traffic (1 of 3)
+      lineinfile:
+        create: yes
+        path: /etc/modules-load.d/k8s.conf
+        line: br_netfilter
+
+    - name: Letting iptables see bridged traffic (2 of 3)
+      blockinfile:
+        create: yes
+        path: /etc/sysctl.d/k8s.conf
+        block: |
           net.bridge.bridge-nf-call-ip6tables = 1
           net.bridge.bridge-nf-call-iptables = 1
-          EOF
-          sudo sysctl --system
+
+    - name: Letting iptables see bridged traffic (3 of 3)
+      shell: sysctl --system
 
     - name: Install prerequisites
       apt:
@@ -32,12 +43,16 @@
           - ca-certificates
           - curl
 
+    - name: Add GPG key for Google/Kubernetes (1 of 2)
+      get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/kubernetes-archive-keyring.gpg
 
-    # TODO use an Ansible module instead
-    - name: Add GPG key for Google/Kubernetes
-      shell: |
-        sudo curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg https://packages.cloud.google.com/apt/doc/apt-key.gpg
-        echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+    - name: Add GPG key for Google/Kubernetes (2 of 2)
+      lineinfile:
+        create: yes
+        path: /etc/apt/sources.list.d/kubernetes.list
+        line: deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main
 
     - name: Install prerequisites
       apt:
@@ -50,5 +65,66 @@
     - name: Add a hold to Kube package versions
       command: sudo apt-mark hold kubelet kubeadm kubectl
 
-    - name: Enable kubectl for Root
-      shell: export KUBECONFIG=/etc/kubernetes/admin.conf # TODO this one's effect is not permanent
+
+    # 3. Initiate and join the cluster
+    # Documentation: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm
+
+    - name: Initiate the cluster
+      when: inventory_hostname in groups['kube-master-1']
+      vars:
+        main_command: kubeadm init
+      shell: "{{ main_command }} || ( kubeadm reset -f && {{ main_command }} )"
+
+    - name: Extract join command
+      when: inventory_hostname in groups['kube-master-1']
+      shell: kubeadm token create --print-join-command
+      register: join_command_raw
+
+    - name: Make the join command reuseable
+      when: inventory_hostname in groups['kube-master-1']
+      set_fact:
+        join_command: "{{ join_command_raw.stdout }}"
+
+
+    - name: Join workers to the cluster 
+      when: inventory_hostname in groups['kube-workers']
+      vars:
+        # TODO fix the error here WIP
+        main_command: "{{ hostvars[groups['kube-master-1'][0]]['join_command'] }} --node-name ip-{{ hostvars[inventory_hostname].ansible_default_ipv4.address }}"
+      shell: "{{ main_command }} || ( kubeadm reset -f && {{ main_command }} )"
+
+    # - name: Join 2nd master to the cluster 
+    #   # TODO
+
+    # 3. Enable using kubectl commands from server's shell
+    # Documentation: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/#more-information
+
+    - name: Enable kubectl for root
+      when: inventory_hostname in groups['kube-master-1'] # TODO make it kube-masters
+      lineinfile:
+        create: yes
+        path: /root/.bashrc
+        line: export KUBECONFIG=/etc/kubernetes/admin.conf
+
+    - name: Enable kubectl for current user (1 of 2)
+      when: inventory_hostname in groups['kube-master-1'] # TODO make it kube-masters
+      file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+
+    - name: Enable kubectl for current user (2 of 2)
+      when: inventory_hostname in groups['kube-master-1'] # TODO make it kube-masters
+      copy:
+        remote_src: yes
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    # 5. Setup Calico network for multi-cluster use
+    # Documentation: https://projectcalico.docs.tigera.io/getting-started/kubernetes/self-managed-onprem/onpremises
+
+    - name: Add Calico network
+      when: inventory_hostname in groups['kube-master-1']
+      become: no
+      shell: kubectl apply -f https://projectcalico.docs.tigera.io/manifests/calico-typha.yaml

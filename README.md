@@ -17,11 +17,15 @@ TODO: just try `apt install ansible`
 
 1. Prepare a hosts file based on the example of `hosts.example` file.
 
+1. Make sure `known_hosts` of the host machine contains the fingerprints of all VMs
 
+1. Run the playbook
+    ```bash
+    ansible-playbook -v install.yml
+    ```
+1. BONUS: An example nginx deployment
 
-
-## X. Usage
-
-```bash
-ansible-playbook -v install.yml
-```
+    source https://kubernetes.io/docs/tasks/run-application/run-stateless-application-deployment/
+    ```bash
+    kubectl apply -f https://k8s.io/examples/application/deployment.yaml
+    ```
